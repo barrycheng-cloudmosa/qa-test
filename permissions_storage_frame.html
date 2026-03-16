@@ -4,38 +4,42 @@
   <meta charset="UTF-8">
   <style>
     body {
-      margin: 10px;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 140px;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 12px;
+      font-size: 13px;
       background: #f0f4ff;
     }
-    #origin { color: #888; margin-bottom: 6px; }
-    #status { color: #555; margin-bottom: 8px; min-height: 16px; }
+    .inner { text-align: center; padding: 10px; width: 100%; }
+    .hint { color: #888; font-size: 11px; margin-bottom: 10px; }
     button {
-      padding: 5px 14px;
+      padding: 9px 22px;
       background: #4f6bed;
       color: #fff;
       border: none;
-      border-radius: 5px;
+      border-radius: 6px;
       cursor: pointer;
-      font-size: 12px;
+      font-size: 13px;
+      font-weight: 600;
     }
     button:disabled { background: #aaa; cursor: not-allowed; }
-    #msg { margin-top: 8px; font-weight: 600; min-height: 16px; }
+    #msg { margin-top: 10px; font-weight: 600; min-height: 16px; line-height: 1.4; }
+    #warn { margin-top: 8px; font-size: 11px; color: #e65100; display: none; }
   </style>
 </head>
 <body>
-  <div id="origin"></div>
-  <div id="status">正在查詢權限狀態…</div>
-  <button id="btn" onclick="requestAccess()">在此跨域 iframe 內請求 Storage Access</button>
-  <div id="msg"></div>
+  <div class="inner">
+    <div class="hint">跨域 iframe（barrycheng-cloudmosa.github.io）</div>
+    <div id="msg">偵測中…</div>
+    <div id="warn"></div>
+    <!-- Button only shown if browser requires user gesture -->
+    <button id="btn" style="display:none; margin-top:10px;" onclick="requestWithGesture(this)">手動測試（點此觸發請求）</button>
+  </div>
 
   <script>
-    document.getElementById('origin').textContent = '此 iframe origin: ' + location.origin;
-
-    // Derive parent origin from ancestorOrigins if available.
-    // Fall back to '*' so this frame works regardless of the parent's domain
-    // (safe here because we only send non-sensitive permission status strings).
     const parentOrigin = (location.ancestorOrigins && location.ancestorOrigins.length > 0)
       ? location.ancestorOrigins[0]
       : '*';
@@ -44,52 +48,62 @@
       try { window.parent.postMessage(data, parentOrigin); } catch (_) {}
     }
 
-    // Query current permission state on load (no user gesture needed)
+    const msgEl  = document.getElementById('msg');
+    const warnEl = document.getElementById('warn');
+    const btnEl  = document.getElementById('btn');
+
+    function setMsg(color, text) {
+      msgEl.style.color = color;
+      msgEl.textContent = text;
+    }
+
+    // On load: try requestStorageAccess() WITHOUT a user gesture.
+    // - If Chrome's interaction heuristic is active → auto-grants (result unreliable)
+    // - If blocked by content setting → NotAllowedError immediately
+    // - If allowed but needs gesture → NotAllowedError about user gesture
     (async () => {
-      const statusEl = document.getElementById('status');
-      if (!('permissions' in navigator)) {
-        statusEl.textContent = '不支援 Permissions API';
-        post({ type: 'storage-access-status', state: 'unsupported' });
-        return;
-      }
-      try {
-        const s = await navigator.permissions.query({ name: 'storage-access' });
-        const update = () => {
-          statusEl.textContent = '目前權限狀態: ' + s.state;
-          post({ type: 'storage-access-status', state: s.state });
-        };
-        update();
-        s.onchange = update;
-      } catch (e) {
-        statusEl.textContent = '無法查詢 storage-access 狀態: ' + e.message;
-        post({ type: 'storage-access-status', state: 'query-error', error: e.message });
-      }
-    })();
-
-    async function requestAccess() {
-      const btn = document.getElementById('btn');
-      const msg = document.getElementById('msg');
-      btn.disabled = true;
-      msg.style.color = '#333';
-      msg.textContent = '請求中…';
-
       if (!('requestStorageAccess' in document)) {
-        msg.style.color = '#c5221f';
-        msg.textContent = '❌ 不支援 requestStorageAccess()';
+        setMsg('#c5221f', '❌ 不支援 requestStorageAccess()');
         post({ type: 'storage-access-result', state: 'unsupported' });
-        btn.disabled = false;
         return;
       }
 
       try {
         await document.requestStorageAccess();
-        msg.style.color = '#1e7e34';
-        msg.textContent = '✅ requestStorageAccess() 已允許';
+        // Auto-granted without user gesture → Chrome's heuristic overrode the setting
+        setMsg('#e65100', '⚠️ Chrome 互動啟發式規則自動授予（結果不反映設定）');
+        warnEl.style.display = 'block';
+        warnEl.textContent = '您曾訪問過此 origin，Chrome 自動繞過設定授予權限。請用全新隱私視窗或清除 barrycheng-cloudmosa.github.io 網站資料後重試。';
+        post({ type: 'storage-access-result', state: 'heuristic-granted' });
+      } catch (e) {
+        if (/gesture|activation|user/i.test(e.message) || e.name === 'SecurityError') {
+          // Browser requires user gesture → setting is ALLOW (or prompt), not BLOCK
+          setMsg('#1967d2', 'ℹ️ 設定為「允許」（需手動點按鈕觸發請求）');
+          btnEl.style.display = 'inline-block';
+          post({ type: 'storage-access-result', state: 'requires-gesture' });
+        } else {
+          // Rejected before user gesture even possible → BLOCKED by content setting
+          setMsg('#1e7e34', '✅ 正確封鎖（Chrome 設定：已禁止）');
+          post({ type: 'storage-access-result', state: 'denied', error: e.name + ': ' + e.message });
+        }
+      }
+    })();
+
+    async function requestWithGesture(btn) {
+      btn.disabled = true;
+      setMsg('#333', '請求中…');
+      try {
+        await document.requestStorageAccess();
+        setMsg('#1e7e34', '✅ requestStorageAccess() 已允許（設定：允許）');
         post({ type: 'storage-access-result', state: 'granted' });
       } catch (e) {
-        msg.style.color = '#c5221f';
-        msg.textContent = '❌ ' + e.name + ': ' + e.message;
-        post({ type: 'storage-access-result', state: 'denied', error: e.name + ': ' + e.message });
+        if (/blocked|denied|not allowed/i.test(e.message) || e.name === 'NotAllowedError') {
+          setMsg('#1e7e34', '✅ 正確封鎖（Chrome 設定：已禁止）');
+          post({ type: 'storage-access-result', state: 'denied-by-setting', error: e.name + ': ' + e.message });
+        } else {
+          setMsg('#c5221f', '❌ 使用者取消：' + e.name);
+          post({ type: 'storage-access-result', state: 'denied', error: e.name + ': ' + e.message });
+        }
       } finally {
         btn.disabled = false;
       }
