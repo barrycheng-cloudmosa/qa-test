@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body>
+<script>
+  (async () => {
+    // Test 1: Storage Access API
+    var hasAccess = null;
+    if (typeof document.hasStorageAccess === 'function') {
+      try { hasAccess = await document.hasStorageAccess(); } catch (_) {}
+    }
+
+    // Test 2: document.cookie read/write
+    // On HTTPS: use SameSite=None; Secure (required for cross-site iframes)
+    // On HTTP:  result is always blocked due to protocol limitation
+    var cookieWritable = false;
+    var isHttps = location.protocol === 'https:';
+    try {
+      var key = '_3pc_' + Math.random().toString(36).slice(2);
+      var cookieStr = key + '=1; path=/; max-age=10';
+      if (isHttps) cookieStr += '; SameSite=None; Secure';
+      document.cookie = cookieStr;
+      cookieWritable = document.cookie.indexOf(key + '=1') !== -1;
+      document.cookie = key + '=; path=/; max-age=0' + (isHttps ? '; SameSite=None; Secure' : '');
+    } catch (_) {}
+
+    window.parent.postMessage({
+      cookieWritable: cookieWritable,
+      hasAccess: hasAccess,
+      isHttps: isHttps
+    }, '*');
+  })();
+</script>
+</body>
+</html>
